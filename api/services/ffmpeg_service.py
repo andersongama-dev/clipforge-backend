@@ -1,5 +1,6 @@
 import ffmpeg
 import os
+from fastapi import UploadFile
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, '..', '..'))
@@ -10,19 +11,22 @@ AUDIOS_DIR = os.path.join(ROOT_DIR, 'audios')
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(AUDIOS_DIR, exist_ok=True)
 
+def handle_audio_extraction(file: UploadFile) -> str:
+    filename = file.filename
+    if not filename:
+        raise ValueError("Filename is missing.")
 
-def extract_audio_wav(video_filename: str) -> str:
-    video_path = os.path.join(UPLOADS_DIR, video_filename)
+    video_path = os.path.join(UPLOADS_DIR, filename)
 
-    if not os.path.exists(video_path):
-        raise FileNotFoundError(f"Video file '{video_filename}' not found in uploads directory.")
-
-    filename_without_ext, _ = os.path.splitext(video_filename)
+    filename_without_ext, _ = os.path.splitext(filename)
     audio_filename = f"{filename_without_ext}.wav"
-
     wav_path = os.path.join(AUDIOS_DIR, audio_filename)
 
     try:
+        with open(video_path, "wb") as buffer:
+            while chunk := file.file.read(1024 * 1024):
+                buffer.write(chunk)
+
         (
             ffmpeg
             .input(video_path)
@@ -36,3 +40,7 @@ def extract_audio_wav(video_filename: str) -> str:
     except ffmpeg.Error as e:
         error_msg = e.stderr.decode('utf-8') if e.stderr else str(e)
         raise RuntimeError(f"FFmpeg processing error: {error_msg}")
+
+    finally:
+        if os.path.exists(video_path):
+            os.remove(video_path)
