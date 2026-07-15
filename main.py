@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, status
 from fastapi.responses import FileResponse
 
 from api.services.ffmpeg_service import handle_audio_extraction
+from api.services.whisper_service import transcribe_audio_wav
 
 app = FastAPI(title="ClipForge API")
 
@@ -67,6 +68,39 @@ async def extract_audio_endpoint(file: UploadFile = File(...)):
 
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error: {str(e)}")
+
+
+@app.post("/audio/transcribe")
+async def transcribe_audio_endpoint(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename is missing."
+        )
+
+    allowed_extensions = [".mp4", ".mkv", ".avi", ".mov", ".flv", ".webm"]
+    _, ext = os.path.splitext(file.filename)
+
+    if ext.lower() not in allowed_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file extension. Allowed: {', '.join(allowed_extensions)}"
+        )
+
+    try:
+        generated_wav_path = handle_audio_extraction(file)
+        result = transcribe_audio_wav(generated_wav_path)
+        return result
+
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error: {str(e)}")
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
