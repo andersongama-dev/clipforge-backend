@@ -3,11 +3,13 @@ import json
 import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from api.services.ffmpeg_service import handle_audio_extraction
 from api.services.whisper_service import transcribe_audio_wav
 from api.services.openrouter_service import analyze_viral_clips
 from api.services.video_service import cut_project_clips
+from api.services.youtube_service import download_youtube_video
 
 app = FastAPI(title="ClipForge API")
 
@@ -17,6 +19,9 @@ PROJECTS_DIR = "outputs"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 
+
+class YouTubeRequest(BaseModel):
+    url: str
 
 @app.get("/")
 def home():
@@ -177,6 +182,45 @@ async def analyze_clips_endpoint(file: UploadFile = File(...)):
 
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error: {str(e)}")
+
+@app.post("/audio/analyze-clips-youtube")
+async def analyze_clips_youtube_endpoint(request: YouTubeRequest):
+    try:
+        downloaded_video_path = download_youtube_video(request.url)
+        video_filename = os.path.basename(downloaded_video_path)
+        filename_without_ext, _ = os.path.splitext(video_filename)
+
+        project_folder = os.path.join(PROJECTS_DIR, filename_without_ext)
+        os.makedirs(project_folder, exist_ok=True)
+
+        project_video_path = os.path.join(project_folder, video_filename)
+        os.rename(downloaded_video_path, project_video_path)
+
+        generated_wav_path = handle_audio_extraction(project_video_path)
+        transcription_data = transcribe_audio_wav(generated_wav_path)
+        clips = analyze_viral_clips(transcription_data)
+
+        clips_json_path = os.path.join(project_folder, "clips.json")
+        with open(clips_json_path, "w", encoding="utf-8") as f:
+            json.dump(clips, f, ensure_ascii=False, indent=2)
+
+        cut_project_clips(project_video_path, clips, project_folder)
+
+        return {
+            "project": filename_without_ext,
+            "message": f"Successfully downloaded, analyzed and generated {len(clips)} clips.",
+            "clips": clips
+        }
+
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error: {str(e)}")
+
+    finally:
+        if 'project_video_path' in locals() and os.path.exists(project_video_path):
+            os.remove(project_video_path)
 
 
 if __name__ == "__main__":
