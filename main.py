@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from api.services.ffmpeg_service import handle_audio_extraction
-from api.services.whisper_service import transcribe_audio_wav
+from api.services.whisper_service import transcribe_in_chunks
 from api.services.openrouter_service import analyze_viral_clips
 from api.services.video_service import cut_project_clips
 from api.services.youtube_service import download_youtube_video
@@ -119,8 +119,8 @@ async def transcribe_audio_endpoint(file: UploadFile = File(...)):
                 buffer.write(chunk)
 
         generated_wav_path = handle_audio_extraction(project_video_path)
-        result = transcribe_audio_wav(generated_wav_path)
-        return result
+        result = transcribe_in_chunks(generated_wav_path)
+        return {"chunks": result}
 
     except FileNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -162,19 +162,24 @@ async def analyze_clips_endpoint(file: UploadFile = File(...)):
                 buffer.write(chunk)
 
         generated_wav_path = handle_audio_extraction(project_video_path)
-        transcription_data = transcribe_audio_wav(generated_wav_path)
-        clips = analyze_viral_clips(transcription_data)
+        chunks_data = transcribe_in_chunks(generated_wav_path)
+
+        all_clips = []
+        for chunk in chunks_data:
+            if chunk.get("text"):
+                clips = analyze_viral_clips(chunk)
+                all_clips.extend(clips)
 
         clips_json_path = os.path.join(project_folder, "clips.json")
         with open(clips_json_path, "w", encoding="utf-8") as f:
-            json.dump(clips, f, ensure_ascii=False, indent=2)
+            json.dump(all_clips, f, ensure_ascii=False, indent=2)
 
-        cut_project_clips(project_video_path, clips, project_folder)
+        cut_project_clips(project_video_path, all_clips, project_folder)
 
         return {
             "project": filename_without_ext,
-            "message": f"Successfully generated {len(clips)} video clips and clips.json.",
-            "clips": clips
+            "message": f"Successfully generated {len(all_clips)} video clips and clips.json.",
+            "clips": all_clips
         }
 
     except RuntimeError as e:
@@ -182,6 +187,11 @@ async def analyze_clips_endpoint(file: UploadFile = File(...)):
 
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error: {str(e)}")
+
+    finally:
+        if os.path.exists(project_video_path):
+            os.remove(project_video_path)
+
 
 @app.post("/audio/analyze-clips-youtube")
 async def analyze_clips_youtube_endpoint(request: YouTubeRequest):
@@ -197,19 +207,24 @@ async def analyze_clips_youtube_endpoint(request: YouTubeRequest):
         os.rename(downloaded_video_path, project_video_path)
 
         generated_wav_path = handle_audio_extraction(project_video_path)
-        transcription_data = transcribe_audio_wav(generated_wav_path)
-        clips = analyze_viral_clips(transcription_data)
+        chunks_data = transcribe_in_chunks(generated_wav_path)
+
+        all_clips = []
+        for chunk in chunks_data:
+            if chunk.get("text"):
+                clips = analyze_viral_clips(chunk)
+                all_clips.extend(clips)
 
         clips_json_path = os.path.join(project_folder, "clips.json")
         with open(clips_json_path, "w", encoding="utf-8") as f:
-            json.dump(clips, f, ensure_ascii=False, indent=2)
+            json.dump(all_clips, f, ensure_ascii=False, indent=2)
 
-        cut_project_clips(project_video_path, clips, project_folder)
+        cut_project_clips(project_video_path, all_clips, project_folder)
 
         return {
             "project": filename_without_ext,
-            "message": f"Successfully downloaded, analyzed and generated {len(clips)} clips.",
-            "clips": clips
+            "message": f"Successfully downloaded, analyzed and generated {len(all_clips)} clips.",
+            "clips": all_clips
         }
 
     except RuntimeError as e:
@@ -221,7 +236,6 @@ async def analyze_clips_youtube_endpoint(request: YouTubeRequest):
     finally:
         if 'project_video_path' in locals() and os.path.exists(project_video_path):
             os.remove(project_video_path)
-
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
