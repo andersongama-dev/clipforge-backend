@@ -11,6 +11,10 @@ def analyze_viral_clips(transcription_data: Dict[str, Any]) -> List[Dict[str, An
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_API_KEY,
+        default_headers={
+            "HTTP-Referer": "https://github.com",
+            "X-Title": "ClipForge API"
+        }
     )
 
     system_prompt = (
@@ -41,7 +45,7 @@ def analyze_viral_clips(transcription_data: Dict[str, Any]) -> List[Dict[str, An
 
     try:
         raw_response = client.chat.completions.create(
-            model="meta-llama/llama-3.2-3b-instruct",
+            model="google/gemini-2.5-flash",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content}
@@ -50,9 +54,13 @@ def analyze_viral_clips(transcription_data: Dict[str, Any]) -> List[Dict[str, An
         )
 
         response = cast(ChatCompletion, raw_response)
+
+        if not response.choices or not response.choices[0].message:
+            raise RuntimeError("Received an empty response structure from OpenRouter.")
+
         response_text = response.choices[0].message.content
         if not response_text:
-            raise RuntimeError("Received an empty response from OpenRouter.")
+            raise RuntimeError("Received an empty response text from OpenRouter.")
 
         parsed = json.loads(response_text.strip())
 
@@ -72,3 +80,19 @@ def analyze_viral_clips(transcription_data: Dict[str, Any]) -> List[Dict[str, An
 
     except Exception as e:
         raise RuntimeError(f"OpenRouter analysis failed: {e}")
+
+def analyze_multiple_chunks(chunks_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    all_clips = []
+
+    for chunk in chunks_data:
+        if not chunk.get("text"):
+            continue
+
+        try:
+            clips = analyze_viral_clips(chunk)
+            all_clips.extend(clips)
+        except Exception as e:
+            print(f"Warning: Failed to analyze chunk: {e}")
+            continue
+
+    return all_clips
